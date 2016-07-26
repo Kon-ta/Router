@@ -18,15 +18,14 @@
 #include	"sendBuf.h"
 
 
-/*なにもしていない場合に254へのarpリクエストを送りつづけている？*/
-
-
-
-
-
 /*各バッファのサイズ*/
-#define QUEUE_SIZE 1001
+#define QUEUE_SIZE 10000
 
+#define TRUE 0
+#define FALSE 1
+
+/*優先パケット判定フラグ*/
+int P_FLAG;
 
 typedef struct	{
 	char	*Device1;
@@ -42,6 +41,8 @@ DEVICE	Device[2];
 
 int	EndFlag=0;
 
+
+/*優先キューの構造体*/
 typedef struct{
 	u_char *data;
 	int size;
@@ -97,10 +98,6 @@ int next(int index){
 	return((index +1)% QUEUE_SIZE);
 
 }
-
-////////////////////////////////////////////////////////////////////////////////////////
-
-
 
 
 /*優先キューにデータを追加する関数*/
@@ -217,24 +214,17 @@ int	len;
 
 	return(0);
 }
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 /*格納の際に呼び出されるパケット解析関数*/
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int Pre_AnalyzePacket(int deviceNo,u_char *data,int size){
 
 u_char	*ptr;
 int	lest;
-//int     bufcnt=0;
-// char ipbuf[]="151";
- // char bufidr[80];
  
 struct ether_header	*eh;
 char	buf[80];
 
-
-//static bool frag_Bover = false;
 
 /*各バッファの構造体宣言*/
 P_QUEUE p;
@@ -247,20 +237,18 @@ N_QUEUE n;
 		DebugPrintf("[%d]:lest(%d)<sizeof(struct ether_header)\n",deviceNo,lest);
 		return(-1);
 	}
-        /*キャストしてそこでの型に合わせて操作してる*/
+        /*キャスト*/
 	eh=(struct ether_header *)ptr;
 	ptr+=sizeof(struct ether_header);
 	lest-=sizeof(struct ether_header);
 
-	/*ここでエラーになっている*/
-	//cd DebugPrintf("Preenqueue");
 	if(memcmp(&eh->ether_dhost,Device[deviceNo].hwaddr,6)!=0){
 		DebugPrintf("[%d]:dhost not match %s\n",deviceNo,my_ether_ntoa_r((u_char *)&eh->ether_dhost,buf,sizeof(buf)));
 		return(-1);
 	}
 
 
-/*Arp処理:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::*/
+　　　　　/*Arp処理:*/
 	if(ntohs(eh->ether_type)==ETHERTYPE_ARP){
 		struct ether_arp	*arp;
 
@@ -282,7 +270,7 @@ N_QUEUE n;
 		}
 	}
 
-/*IPパケットの場合の処理：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：*/
+　　　　/*IPパケットの場合の処理*/
 	else if(ntohs(eh->ether_type)==ETHERTYPE_IP){
 		struct iphdr	*iphdr;
 		u_char	option[1500];
@@ -319,15 +307,14 @@ fprintf(stderr,"IP checksum error\n");
 			return(-1);
 		}
 
-	
-
-
+		/*パケット格納処理*/
 		if(iphdr->tos == 150){
 			p.size = size;
 			p.tno = deviceNo;
 			p.data =data;
 			/*優先バッファへの格納処理*/
 			DebugPrintf("in P QUEUE");
+			P_FLAG = TRUE;
 			p_enqueue(p);
 			
 		}else{
@@ -348,15 +335,12 @@ fprintf(stderr,"IP checksum error\n");
 }
 
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /*バッファから取り出した後に使用するパケット解析関数*/
 int AnalyzePacket(int deviceNo,u_char *data,int size)
 {
 u_char	*ptr;
 int	lest;
-//int     bufcnt=0;
-// char ipbuf[]="151";
- // char bufidr[80];
+
  
 struct ether_header	*eh;
 char	buf[80];
@@ -371,10 +355,6 @@ u_char	hwaddr[6];
 	eh=(struct ether_header *)ptr;
 	ptr+=sizeof(struct ether_header);
 	lest-=sizeof(struct ether_header);
-
-
-
-/*：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：：*/
 
 		struct iphdr	*iphdr;
 		u_char	option[1500];
@@ -410,8 +390,7 @@ fprintf(stderr,"IP checksum error\n");
 			SendIcmpTimeExceeded(deviceNo,eh,iphdr,data,size);
 			return(-1);
 		}
-		//tnoの初期化ポイント送信するほうのインタフェース番号を知りたいので自分のインタフェース番号の逆を入力。
-
+		//送信先へのインタフェース番号の取得
 		tno=(!deviceNo);
 		
 
@@ -467,44 +446,13 @@ fprintf(stderr,"IP checksum error\n");
 		iphdr->check=0;
 		iphdr->check=checksum2((u_char *)iphdr,sizeof(struct iphdr),option,optionLen);
 		
-		/*送信するシステムコール writeでパケットデータをファイルディスクリプタに書き込んだらその分をバッファから消去？*/
+		/*writeの第二引数はポインタ*/
 		write(Device[tno].soc,data,size);
 		//DebugPrintf("Sendpacket");
 	
 
 	return(0);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-///////////////////////////////////////////////////////////////////////////////////////
-
-
-
-
-
-
-
-
-
-
 
 
 /*優先キューに入っているデータを1個取り出して送信する関数*/
@@ -522,6 +470,7 @@ int p_dequeue(){
 	x=p_queue[p_deq_point];
 	if(x.flag !=1){
 		//printf("can't not deque queue is empty");
+		P_FLAG = FALSE;
 		return 1;
 	}
 	else{
@@ -532,7 +481,6 @@ int p_dequeue(){
 		size=x.size; 
 		/*P_QUEUE型のdeq_dataをAnalyzepaket関数に送信する*/
 		AnalyzePacket(deviceNO,data,size);
-		/*変更したフラグを再度格納する処理が必要では？？*/
 		
 		x.flag =0;
 	       p_queue[p_deq_point]=x;
@@ -583,11 +531,7 @@ int n_dequeue(){
 		
 }
 
-
-
-
-
-/*キューの送信の大本の関数。優先キューのチェックも行う。（それぞれのキューはどのように外部参照すればよいのか→例では普通に構造体宣言している)*/
+/*キューの送信の大本の関数。優先キューのチェックも行う。*/
 
 int check_queue_transmit(){
 
@@ -596,27 +540,33 @@ int check_queue_transmit(){
 		
 		
 		while(1){
-		/*GetSendQueData関数でqueueの先頭を確保、そして送信先情報を引数でもらった構造体ポインタに格納・・・*/
+		//GetSendQueData関数でqueueの先頭を確保、そして送信先情報を引数でもらった構造体ポインタに格納
+			
+			int i;
+			for(i=0;i<100;i++){
+				
+			}
 			
 			if(EndFlag==1){
 				break;
 			}
 			else {
 				if((p_dequeue())==1){
-				
-			//	DebugPrintf("Dequeue Primary packet");
-				n_dequeue();
+			
+					if(P_FLAG==FALSE){
+						n_dequeue();
+					}
 				}
 			
 			}
 
 			
 		}
-	
+		
  	 }
-//	DebugPrintf("BufferSend:end\n");
 	return(0);
 }
+
 
 
 /*送信スレッド起動の大本*/
@@ -629,9 +579,7 @@ void *BufThread(void *arg){
 
 }
 
-
-
-
+/*デバッグプリント表示関数*/
 int DebugPerror(char *msg)
 {
 	if(Param.DebugOut){
@@ -643,20 +591,13 @@ int DebugPerror(char *msg)
 
 
 
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-
-
 int Router()
 {
 struct pollfd	targets[2];
 int	nready,i,size;
 
 /*パケットデータ格納バッファ*/
-u_char	buf[1000000];
+ static u_char	buf[100000000];
 
 	targets[0].fd=Device[0].soc;
 	targets[0].events=POLLIN|POLLERR;
@@ -681,7 +622,6 @@ u_char	buf[1000000];
 						}
 						else{
 							//一回のreadで読み込まれるのは70~90バイト（ping送信時）
-							//DebugPrintf("[%d]packet size=",size);
 							Pre_AnalyzePacket(i,buf,size);
 						}
 					}
